@@ -1,0 +1,27 @@
+[Unit]
+Description=Obey RP HTTP bridge (qbx_core <-> obey-portal)
+After=network.target mysql.service mariadb.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=obey
+Group=obey
+WorkingDirectory=/opt/obey-bridge
+EnvironmentFile=/opt/obey-bridge/.env
+ExecStart=/usr/bin/node /opt/obey-bridge/dist/server.js
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/obey-bridge/logs
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target
