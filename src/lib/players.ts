@@ -56,75 +56,8 @@ export async function getPlayer(citizenid: string): Promise<PlayerRow | null> {
   };
 }
 
-export type LeaderboardType =
-  | "top-earner"
-  | "most-arrests"
-  | "longest-streak"
-  | "top-donor";
-
-export type LeaderboardRow = {
-  rank: number;
-  citizenid: string;
-  display: string;
-  metric: number;
-};
-
-const LEADERBOARD_SQL: Record<LeaderboardType, string> = {
-  "top-earner": `
-    SELECT citizenid, name,
-           CAST(JSON_EXTRACT(money, '$.bank') AS UNSIGNED) AS metric
-      FROM players
-     ORDER BY metric DESC
-     LIMIT ?`,
-  "top-donor": `
-    SELECT citizenid, name, COALESCE(obey_coins, 0) AS metric
-      FROM players
-     ORDER BY metric DESC
-     LIMIT ?`,
-  "most-arrests": `
-    SELECT p.citizenid, p.name, COALESCE(SUM(a.count), 0) AS metric
-      FROM players p
- LEFT JOIN obey_metric_arrests a ON a.citizenid = p.citizenid
-  GROUP BY p.citizenid
-  ORDER BY metric DESC
-     LIMIT ?`,
-  "longest-streak": `
-    SELECT p.citizenid, p.name, COALESCE(s.best_streak, 0) AS metric
-      FROM players p
- LEFT JOIN obey_metric_streak s ON s.citizenid = p.citizenid
-  ORDER BY metric DESC
-     LIMIT ?`,
-};
-
-type LeaderboardDbRow = RowDataPacket & {
-  citizenid: string;
-  name: string;
-  metric: string | number | null;
-};
-
-export async function getLeaderboard(
-  type: LeaderboardType,
-  limit = 10,
-): Promise<LeaderboardRow[]> {
-  const sql = LEADERBOARD_SQL[type];
-  const [rows] = await pool.query<LeaderboardDbRow[]>(sql, [limit]);
-  return rows.map((r, i) => {
-    const charinfo = safeJson<{ firstname?: string; lastname?: string }>(
-      (r as unknown as { charinfo?: string }).charinfo ?? "",
-      {},
-    );
-    const display =
-      charinfo.firstname || charinfo.lastname
-        ? `${charinfo.firstname ?? ""} ${charinfo.lastname ?? ""}`.trim()
-        : r.name;
-    return {
-      rank: i + 1,
-      citizenid: r.citizenid,
-      display: display || r.citizenid,
-      metric: Number(r.metric ?? 0),
-    };
-  });
-}
+// Leaderboard helpers live in src/lib/leaderboards.ts (Phase 8). The bridge
+// route at src/routes/leaderboard.ts imports from there.
 
 export async function creditCoins(args: {
   citizenid: string;

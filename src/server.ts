@@ -1,4 +1,9 @@
-import express, { type ErrorRequestHandler, type Request } from "express";
+import express, {
+  type ErrorRequestHandler,
+  type NextFunction,
+  type Request,
+  type Response,
+} from "express";
 import { config } from "./config.js";
 import { logger } from "./logger.js";
 import { hmacAuth } from "./middleware/hmac.js";
@@ -9,6 +14,7 @@ import { leaderboardRouter } from "./routes/leaderboard.js";
 import { coinsRouter } from "./routes/coins.js";
 import { whitelistRouter } from "./routes/whitelist.js";
 import { plusRouter } from "./routes/plus.js";
+import { eventsRouter } from "./routes/events.js";
 
 const app = express();
 
@@ -31,6 +37,21 @@ app.use("/leaderboard", hmacAuth, leaderboardRouter);
 app.use("/coins", hmacAuth, coinsRouter);
 app.use("/whitelist", hmacAuth, whitelistRouter);
 app.use("/plus", hmacAuth, plusRouter);
+
+// /events has mixed auth: GET /stream + GET /recent are public (read-only,
+// EventSource can't send custom headers), POST / is HMAC-signed (FiveM
+// resource → bridge writes).
+function eventsAuth(req: Request, res: Response, next: NextFunction) {
+  if (
+    req.method === "GET" &&
+    (req.path === "/stream" || req.path === "/recent")
+  ) {
+    next();
+    return;
+  }
+  hmacAuth(req, res, next);
+}
+app.use("/events", eventsAuth, eventsRouter);
 
 app.use((req, res) => {
   res.status(404).json({ error: "not-found", path: req.path });
