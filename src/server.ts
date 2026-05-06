@@ -7,6 +7,7 @@ import { serverRouter } from "./routes/server.js";
 import { playerRouter } from "./routes/player.js";
 import { leaderboardRouter } from "./routes/leaderboard.js";
 import { coinsRouter } from "./routes/coins.js";
+import { whitelistRouter } from "./routes/whitelist.js";
 
 const app = express();
 
@@ -14,7 +15,7 @@ app.disable("x-powered-by");
 
 app.use(
   express.json({
-    limit: "64kb",
+    limit: "256kb",
     verify: (req: Request, _res, buf) => {
       (req as Request & { rawBody?: string }).rawBody = buf.toString("utf8");
     },
@@ -27,6 +28,7 @@ app.use("/server", hmacAuth, serverRouter);
 app.use("/player", hmacAuth, playerRouter);
 app.use("/leaderboard", hmacAuth, leaderboardRouter);
 app.use("/coins", hmacAuth, coinsRouter);
+app.use("/whitelist", hmacAuth, whitelistRouter);
 
 app.use((req, res) => {
   res.status(404).json({ error: "not-found", path: req.path });
