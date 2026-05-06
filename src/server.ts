@@ -8,6 +8,7 @@ import { playerRouter } from "./routes/player.js";
 import { leaderboardRouter } from "./routes/leaderboard.js";
 import { coinsRouter } from "./routes/coins.js";
 import { whitelistRouter } from "./routes/whitelist.js";
+import { plusRouter } from "./routes/plus.js";
 
 const app = express();
 
@@ -29,6 +30,7 @@ app.use("/player", hmacAuth, playerRouter);
 app.use("/leaderboard", hmacAuth, leaderboardRouter);
 app.use("/coins", hmacAuth, coinsRouter);
 app.use("/whitelist", hmacAuth, whitelistRouter);
+app.use("/plus", hmacAuth, plusRouter);
 
 app.use((req, res) => {
   res.status(404).json({ error: "not-found", path: req.path });
