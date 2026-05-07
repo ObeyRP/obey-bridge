@@ -15,6 +15,7 @@ import { coinsRouter } from "./routes/coins.js";
 import { whitelistRouter } from "./routes/whitelist.js";
 import { plusRouter } from "./routes/plus.js";
 import { eventsRouter } from "./routes/events.js";
+import { forumRouter } from "./routes/forum.js";
 
 const app = express();
 
@@ -37,6 +38,7 @@ app.use("/leaderboard", hmacAuth, leaderboardRouter);
 app.use("/coins", hmacAuth, coinsRouter);
 app.use("/whitelist", hmacAuth, whitelistRouter);
 app.use("/plus", hmacAuth, plusRouter);
+app.use("/forum", hmacAuth, forumRouter);
 
 // /events has mixed auth: GET /stream + GET /recent are public (read-only,
 // EventSource can't send custom headers), POST / is HMAC-signed (FiveM
