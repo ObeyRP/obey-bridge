@@ -31,7 +31,10 @@ export function hmacAuth(req: Request, res: Response, next: NextFunction): void 
   }
 
   const rawBody = (req as Request & { rawBody?: string }).rawBody ?? "";
-  const payload = `${ts}.${req.method.toUpperCase()}.${req.path}.${rawBody}`;
+  // Use req.originalUrl so the signature payload matches what the portal
+  // signed: it includes the full path (with the /forum, /whitelist, etc.
+  // mount prefix that Express strips from req.path) AND the query string.
+  const payload = `${ts}.${req.method.toUpperCase()}.${req.originalUrl}.${rawBody}`;
   const expected = crypto
     .createHmac("sha256", config.BRIDGE_SHARED_SECRET)
     .update(payload)
