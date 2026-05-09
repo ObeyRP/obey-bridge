@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS obey_plus_subscriptions (
   UNIQUE KEY uniq_discord_active (discord_id, status),
   KEY idx_discord_id (discord_id),
   KEY idx_ends_at (ends_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 3. Idempotent receipt log, mirrors coin_ledger but for Plus events.
 CREATE TABLE IF NOT EXISTS obey_plus_event_log (
@@ -46,6 +46,6 @@ CREATE TABLE IF NOT EXISTS obey_plus_event_log (
   UNIQUE KEY uniq_idem (idempotency_key),
   KEY idx_discord_id (discord_id),
   KEY idx_created_at (created_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 COMMIT;

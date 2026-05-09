@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS applications (
   KEY idx_role (role),
   KEY idx_applicant (applicant_discord_id),
   KEY idx_submitted_at (submitted_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS application_audit_log (
   id                BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -39,6 +39,6 @@ CREATE TABLE IF NOT EXISTS application_audit_log (
   KEY idx_created_at (created_at),
   CONSTRAINT fk_audit_application FOREIGN KEY (application_id)
     REFERENCES applications (id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 COMMIT;
