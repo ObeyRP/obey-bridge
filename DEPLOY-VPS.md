@@ -397,8 +397,9 @@ Variables → Production scope:
 
 | Key | Value |
 |---|---|
-| `BRIDGE_BASE_URL` | `https://bridge.obeyrp.uk` |
+| `BRIDGE_URL` | `https://bridge.obeyrp.uk` |
 | `BRIDGE_SHARED_SECRET` | the same hex from `~/obey-bridge/.env` |
+| `NEXT_PUBLIC_BRIDGE_URL` | `https://bridge.obeyrp.uk` (for dashboard activity feed) |
 
 Then: Deployments → ⋯ on latest → **Redeploy** → untick "Use existing
 build cache" → confirm. Wait ~2 min.
@@ -441,10 +442,13 @@ mysql -h "$FIVEM_TS_IP" -u obey_bridge -p qbx_core -e "SHOW TABLES"
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `bridge-unconfigured` in portal | Vercel env vars not picked up | Redeploy with cache cleared |
-| `bridge-error` 502 | HMAC secret mismatch | Re-paste hex into both Vercel and `.env`, restart bridge, redeploy portal |
+| `bridge-error` 502, bridge logs `bad-signature` | HMAC secret mismatch OR `req.path`/`req.originalUrl` bug (fixed in cdb42b2) | Confirm bridge is on `cdb42b2`+; otherwise re-paste hex into both Vercel and `.env`, restart bridge, redeploy portal |
 | `ECONNREFUSED <FIVEM_TS_IP>:3306` | MySQL not listening on Tailscale, or firewall | Re-check `bind-address=0.0.0.0` in `my.ini`, restart MySQL80 service, confirm firewall rule is on Private profile |
+| MySQL `Illegal mix of collations` on JOIN | Bridge tables created with different collation than qbox `players` | `ALTER TABLE <ours> CONVERT TO CHARACTER SET utf8mb4 COLLATE <whatever players.citizenid uses>`. Migration files (99393eb+) default to `utf8mb4_unicode_ci` to match qbox-core. |
+| Bridge resolves Tailscale **hostname** instead of IP in HMAC error | Reverse DNS lookups on MySQL | Add `skip-name-resolve` to `my.ini`, restart MySQL80 |
 | Tunnel offline | cloudflared service stopped | `sudo systemctl restart cloudflared` |
 | Reboot kills bridge | systemd unit disabled | `sudo systemctl enable obey-bridge` |
+| Page shows old "bridge offline" after a fix | Vercel ISR caching (e.g. `/leaderboards` has `revalidate = 3600`) | Trigger a fresh Vercel redeploy to bust the cache, or wait the ISR window |
 
 ---
 
