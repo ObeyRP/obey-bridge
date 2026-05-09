@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS obey_coin_ledger (
   UNIQUE KEY uniq_idem (idempotency_key),
   KEY idx_citizenid (citizenid),
   KEY idx_created_at (created_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- 3. Per-player counters for leaderboards. Populated by the FiveM scripts
 --    (Phase 8 obey-feed resource) — Phase 4 only reads.
@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS obey_metric_arrests (
   count     INT          NOT NULL DEFAULT 0,
   updated_at DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (citizenid)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 CREATE TABLE IF NOT EXISTS obey_metric_streak (
   citizenid    VARCHAR(64) NOT NULL,
@@ -41,6 +41,6 @@ CREATE TABLE IF NOT EXISTS obey_metric_streak (
   current_streak INT        NOT NULL DEFAULT 0,
   last_claimed_utc_date DATE,
   PRIMARY KEY (citizenid)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 COMMIT;

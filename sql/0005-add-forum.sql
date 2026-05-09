@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS forum_posts (
   KEY idx_type_created (type, created_at),
   KEY idx_status (status),
   KEY idx_author (author_discord_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- 2. Replies — flat list per post (no nesting in v1).
 CREATE TABLE IF NOT EXISTS forum_replies (
@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS forum_replies (
   KEY idx_post (post_id, created_at),
   CONSTRAINT fk_forum_reply_post FOREIGN KEY (post_id)
     REFERENCES forum_posts (id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- 3. Audit log — every status change, lock/unlock, deletion, by which
 --    staff member. Append-only.
@@ -64,6 +64,6 @@ CREATE TABLE IF NOT EXISTS forum_audit_log (
   KEY idx_post (post_id, created_at),
   CONSTRAINT fk_forum_audit_post FOREIGN KEY (post_id)
     REFERENCES forum_posts (id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 COMMIT;

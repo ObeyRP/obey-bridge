@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS events_feed (
   KEY idx_occurred_at (occurred_at),
   KEY idx_actor (actor_cid),
   KEY idx_subject (subject_cid)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- 2. obey_metric_log — append-only per-event metric writes. Powers the
 --    Big Board with arbitrary time filters (today / week / month / all).
@@ -35,6 +35,6 @@ CREATE TABLE IF NOT EXISTS obey_metric_log (
   PRIMARY KEY (id),
   KEY idx_metric_time (metric, occurred_at),
   KEY idx_citizenid_metric (citizenid, metric, occurred_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 COMMIT;
