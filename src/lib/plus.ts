@@ -90,7 +90,7 @@ async function logEvent(
     await conn.query(
       `INSERT INTO obey_plus_event_log
          (idempotency_key, discord_id, event, details, created_at)
-       VALUES (?, ?, ?, CAST(? AS JSON), NOW())`,
+       VALUES (?, ?, ?, ?, NOW())`,
       [
         args.idempotencyKey,
         args.discordId,

@@ -173,7 +173,7 @@ eventsRouter.post("/", async (req, res, next) => {
     }
     await pool.query(
       `INSERT INTO events_feed (kind, actor_cid, subject_cid, body, metadata, occurred_at)
-       VALUES (?, ?, ?, ?, CAST(? AS JSON), NOW())`,
+       VALUES (?, ?, ?, ?, ?, NOW())`,
       [
         parsed.data.kind,
         parsed.data.actor_cid ?? null,
