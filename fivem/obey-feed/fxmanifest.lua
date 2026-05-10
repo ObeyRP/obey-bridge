@@ -8,6 +8,7 @@ version '1.0.0'
 
 server_scripts {
   'config.lua',
+  'sha256.lua',
   'server.lua',
 }
 
