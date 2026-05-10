@@ -70,13 +70,18 @@ local function pushEvent(args)
     print('[obey-feed] pushEvent: bad args')
     return
   end
-  postJson('/events', {
+  local payload = {
     kind        = args.kind,
     actor_cid   = args.actor_cid,
     subject_cid = args.subject_cid,
     body        = args.body,
-    metadata    = args.metadata or {},
-  })
+  }
+  -- Only include metadata if it has at least one key — Lua's empty {} would
+  -- JSON-encode as [] (array) and the bridge expects a JSON object.
+  if args.metadata and next(args.metadata) ~= nil then
+    payload.metadata = args.metadata
+  end
+  postJson('/events', payload)
 end
 
 local function logMetric(args)
