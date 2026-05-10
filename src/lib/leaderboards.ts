@@ -81,15 +81,23 @@ export async function getLeaderboard(
 ): Promise<LeaderboardRow[]> {
   const { sql: timeFilter } = timeFilterFragment(window);
 
+  // All metric-driven boards read from events_feed (kind='metric:X', amount
+  // in metadata.amount) — the FiveM side writes everything there via
+  // obey-feed's logMetric() export. The legacy obey_metric_log table is
+  // currently unused.
+  const AMOUNT_SQL =
+    "CAST(JSON_UNQUOTE(JSON_EXTRACT(l.metadata, '$.amount')) AS UNSIGNED)";
+
   switch (kind) {
     case "top-earner": {
       // 'earnings' metric — FiveM scripts log earnings per shift / job.
       const [rows] = await pool.query<Row[]>(
-        `SELECT p.citizenid, p.charinfo, p.name, SUM(l.amount) AS metric
-           FROM obey_metric_log l
-           JOIN players p ON p.citizenid = l.citizenid
-          WHERE l.metric = 'earnings' ${timeFilter}
+        `SELECT p.citizenid, p.charinfo, p.name, SUM(${AMOUNT_SQL}) AS metric
+           FROM events_feed l
+           JOIN players p ON p.citizenid = l.actor_cid
+          WHERE l.kind = 'metric:earnings' ${timeFilter}
           GROUP BY p.citizenid
+         HAVING metric > 0
           ORDER BY metric DESC
           LIMIT ?`,
         [limit],
@@ -97,12 +105,15 @@ export async function getLeaderboard(
       return formatRow(rows);
     }
     case "most-arrests": {
+      // amount is typically 1 per event but use SUM to be tolerant of
+      // batched/multi-arrest events.
       const [rows] = await pool.query<Row[]>(
-        `SELECT p.citizenid, p.charinfo, p.name, COUNT(*) AS metric
-           FROM obey_metric_log l
-           JOIN players p ON p.citizenid = l.citizenid
-          WHERE l.metric = 'arrest' ${timeFilter}
+        `SELECT p.citizenid, p.charinfo, p.name, SUM(${AMOUNT_SQL}) AS metric
+           FROM events_feed l
+           JOIN players p ON p.citizenid = l.actor_cid
+          WHERE l.kind = 'metric:arrest' ${timeFilter}
           GROUP BY p.citizenid
+         HAVING metric > 0
           ORDER BY metric DESC
           LIMIT ?`,
         [limit],
@@ -110,15 +121,18 @@ export async function getLeaderboard(
       return formatRow(rows);
     }
     case "longest-streak": {
-      // Streak is special — it's already a per-day counter so the time
-      // filter is "best streak in the window" or just "current best
-      // streak". We use best_streak from obey_metric_streak for "all"
-      // and longest run within window for time-bound.
+      // For 'all' time, use the canonical best-ever streak stored on the
+      // player by the FiveM-side daily-streak tracker (players.metadata
+      // .obey_streak_best). For windowed views, count distinct claim days
+      // inside the window.
       if (window === "all") {
         const [rows] = await pool.query<Row[]>(
-          `SELECT p.citizenid, p.charinfo, p.name, COALESCE(s.best_streak, 0) AS metric
+          `SELECT p.citizenid, p.charinfo, p.name,
+                  COALESCE(
+                    CAST(JSON_UNQUOTE(JSON_EXTRACT(p.metadata, '$.obey_streak_best')) AS UNSIGNED),
+                    0
+                  ) AS metric
              FROM players p
-        LEFT JOIN obey_metric_streak s ON s.citizenid = p.citizenid
             ORDER BY metric DESC
             LIMIT ?`,
           [limit],
@@ -127,10 +141,11 @@ export async function getLeaderboard(
       }
       const [rows] = await pool.query<Row[]>(
         `SELECT p.citizenid, p.charinfo, p.name, COUNT(DISTINCT DATE(l.occurred_at)) AS metric
-           FROM obey_metric_log l
-           JOIN players p ON p.citizenid = l.citizenid
-          WHERE l.metric = 'streak_day' ${timeFilter}
+           FROM events_feed l
+           JOIN players p ON p.citizenid = l.actor_cid
+          WHERE l.kind = 'metric:streak_day' ${timeFilter}
           GROUP BY p.citizenid
+         HAVING metric > 0
           ORDER BY metric DESC
           LIMIT ?`,
         [limit],
@@ -138,6 +153,8 @@ export async function getLeaderboard(
       return formatRow(rows);
     }
     case "top-donor": {
+      // Top Donor is the one board that doesn't depend on FiveM events —
+      // it sums Tebex coin ledger rows directly. Kept as-is.
       const [rows] = await pool.query<Row[]>(
         `SELECT p.citizenid, p.charinfo, p.name, SUM(l.amount) AS metric
            FROM obey_coin_ledger l
@@ -152,11 +169,12 @@ export async function getLeaderboard(
     }
     case "most-wanted": {
       const [rows] = await pool.query<Row[]>(
-        `SELECT p.citizenid, p.charinfo, p.name, MAX(l.amount) AS metric
-           FROM obey_metric_log l
-           JOIN players p ON p.citizenid = l.citizenid
-          WHERE l.metric = 'wanted_stars' ${timeFilter}
+        `SELECT p.citizenid, p.charinfo, p.name, MAX(${AMOUNT_SQL}) AS metric
+           FROM events_feed l
+           JOIN players p ON p.citizenid = l.actor_cid
+          WHERE l.kind = 'metric:wanted_stars' ${timeFilter}
           GROUP BY p.citizenid
+         HAVING metric > 0
           ORDER BY metric DESC
           LIMIT ?`,
         [limit],
@@ -164,12 +182,14 @@ export async function getLeaderboard(
       return formatRow(rows);
     }
     case "best-mechanic": {
+      // amount is typically 1 per event but use SUM for tolerance.
       const [rows] = await pool.query<Row[]>(
-        `SELECT p.citizenid, p.charinfo, p.name, COUNT(*) AS metric
-           FROM obey_metric_log l
-           JOIN players p ON p.citizenid = l.citizenid
-          WHERE l.metric = 'mechanic_repair' ${timeFilter}
+        `SELECT p.citizenid, p.charinfo, p.name, SUM(${AMOUNT_SQL}) AS metric
+           FROM events_feed l
+           JOIN players p ON p.citizenid = l.actor_cid
+          WHERE l.kind = 'metric:mechanic_repair' ${timeFilter}
           GROUP BY p.citizenid
+         HAVING metric > 0
           ORDER BY metric DESC
           LIMIT ?`,
         [limit],
@@ -179,11 +199,9 @@ export async function getLeaderboard(
     case "hours-played": {
       // Sourced from events_feed kind='metric:playtime' rows (the FiveM
       // side pushes amount=5 every 5 min per online player). amount is in
-      // minutes; DIV 60 gives whole hours. HAVING filters out the long
-      // tail of 0-hour rows when a window has no events.
+      // minutes; DIV 60 gives whole hours.
       const [rows] = await pool.query<Row[]>(
-        `SELECT p.citizenid, p.charinfo, p.name,
-                SUM(CAST(JSON_UNQUOTE(JSON_EXTRACT(l.metadata, '$.amount')) AS UNSIGNED)) DIV 60 AS metric
+        `SELECT p.citizenid, p.charinfo, p.name, SUM(${AMOUNT_SQL}) DIV 60 AS metric
            FROM events_feed l
            JOIN players p ON p.citizenid = l.actor_cid
           WHERE l.kind = 'metric:playtime' ${timeFilter}
