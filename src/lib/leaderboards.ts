@@ -7,7 +7,8 @@ export type LeaderboardKind =
   | "longest-streak"
   | "top-donor"
   | "most-wanted"
-  | "best-mechanic";
+  | "best-mechanic"
+  | "hours-played";
 
 export type LeaderboardWindow = "today" | "week" | "month" | "all";
 
@@ -25,6 +26,7 @@ export const LEADERBOARD_KINDS: readonly LeaderboardKind[] = [
   "top-donor",
   "most-wanted",
   "best-mechanic",
+  "hours-played",
 ];
 
 const WINDOW_TO_INTERVAL: Record<LeaderboardWindow, string | null> = {
@@ -168,6 +170,25 @@ export async function getLeaderboard(
            JOIN players p ON p.citizenid = l.citizenid
           WHERE l.metric = 'mechanic_repair' ${timeFilter}
           GROUP BY p.citizenid
+          ORDER BY metric DESC
+          LIMIT ?`,
+        [limit],
+      );
+      return formatRow(rows);
+    }
+    case "hours-played": {
+      // Sourced from events_feed kind='metric:playtime' rows (the FiveM
+      // side pushes amount=5 every 5 min per online player). amount is in
+      // minutes; DIV 60 gives whole hours. HAVING filters out the long
+      // tail of 0-hour rows when a window has no events.
+      const [rows] = await pool.query<Row[]>(
+        `SELECT p.citizenid, p.charinfo, p.name,
+                SUM(CAST(JSON_UNQUOTE(JSON_EXTRACT(l.metadata, '$.amount')) AS UNSIGNED)) DIV 60 AS metric
+           FROM events_feed l
+           JOIN players p ON p.citizenid = l.actor_cid
+          WHERE l.kind = 'metric:playtime' ${timeFilter}
+          GROUP BY p.citizenid
+         HAVING metric > 0
           ORDER BY metric DESC
           LIMIT ?`,
         [limit],

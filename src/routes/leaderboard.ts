@@ -17,6 +17,7 @@ const ParamsSchema = z.object({
     "top-donor",
     "most-wanted",
     "best-mechanic",
+    "hours-played",
   ]),
 });
 
