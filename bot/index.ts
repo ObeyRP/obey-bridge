@@ -25,8 +25,10 @@ async function main(): Promise<void> {
       // MESSAGE CONTENT is a Privileged Intent — must also be enabled in
       // the Discord Dev Portal (Bot tab → Privileged Gateway Intents).
       // Without it, msg.content is always an empty string.
+      // It's the only privileged intent we need: msg.member.displayName
+      // (used by announcements-sync) is delivered with the messageCreate
+      // payload regardless of the GuildMembers intent.
       GatewayIntentBits.MessageContent,
-      GatewayIntentBits.GuildMembers,
     ],
     // Helpful for messages that arrive before the channel cache is warm
     // (e.g. immediately after bot restart).
