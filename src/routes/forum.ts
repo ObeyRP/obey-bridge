@@ -72,6 +72,10 @@ const CreateBody = z.object({
   author_discord_id: z.string().regex(/^\d{15,21}$/),
   author_name: z.string().min(1).max(120),
   author_avatar: z.string().url().nullable().optional().default(null),
+  // Optional idempotency key. The Discord bot's announcements-sync handler
+  // sends `discord-msg:<message-id>` so re-runs (bot restart, ratelimit
+  // retries) don't dupe the forum.
+  idempotency_key: z.string().min(1).max(128).optional(),
 });
 
 forumRouter.post("/posts", async (req, res, next) => {
@@ -83,15 +87,22 @@ forumRouter.post("/posts", async (req, res, next) => {
         .json({ error: "bad-body", issues: parsed.error.flatten() });
       return;
     }
-    const id = await createPost({
+    const result = await createPost({
       type: parsed.data.type,
       title: parsed.data.title,
       body: parsed.data.body,
       author_discord_id: parsed.data.author_discord_id,
       author_name: parsed.data.author_name,
       author_avatar: parsed.data.author_avatar ?? null,
+      ...(parsed.data.idempotency_key
+        ? { idempotency_key: parsed.data.idempotency_key }
+        : {}),
     });
-    res.status(201).json({ id });
+    // 201 for fresh creates, 200 for idempotent replays. Either way the
+    // caller gets the id of the post they were trying to create.
+    res
+      .status(result.deduplicated ? 200 : 201)
+      .json({ id: result.id, deduplicated: result.deduplicated });
   } catch (err) {
     next(err);
   }

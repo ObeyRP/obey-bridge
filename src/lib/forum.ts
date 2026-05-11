@@ -155,11 +155,28 @@ export async function createPost(args: {
   author_discord_id: string;
   author_name: string;
   author_avatar?: string | null;
-}): Promise<number> {
+  /** Optional idempotency key. If a post with this key already exists,
+   *  the existing post's id is returned and no new row is written. The
+   *  Discord bot uses `discord-msg:<message-id>` for this so a bot
+   *  restart that re-sees old messages doesn't dupe the forum. */
+  idempotency_key?: string | null;
+}): Promise<{ id: number; deduplicated: boolean }> {
+  const idemKey = args.idempotency_key ?? null;
+
+  if (idemKey) {
+    const [existing] = await pool.query<RowDataPacket[]>(
+      `SELECT id FROM forum_posts WHERE idempotency_key = ? LIMIT 1`,
+      [idemKey],
+    );
+    const row = existing[0] as { id?: number } | undefined;
+    if (row?.id) return { id: row.id, deduplicated: true };
+  }
+
   const [result] = await pool.query<ResultSetHeader>(
     `INSERT INTO forum_posts
-       (type, title, body, author_discord_id, author_name, author_avatar)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+       (type, title, body, author_discord_id, author_name, author_avatar,
+        idempotency_key)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
     [
       args.type,
       args.title,
@@ -167,6 +184,7 @@ export async function createPost(args: {
       args.author_discord_id,
       args.author_name,
       args.author_avatar ?? null,
+      idemKey,
     ],
   );
   await pool.query(
@@ -177,10 +195,10 @@ export async function createPost(args: {
       result.insertId,
       args.author_discord_id,
       args.author_name,
-      JSON.stringify({ type: args.type }),
+      JSON.stringify({ type: args.type, idempotency_key: idemKey }),
     ],
   );
-  return result.insertId;
+  return { id: result.insertId, deduplicated: false };
 }
 
 export async function addReply(args: {

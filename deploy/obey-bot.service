@@ -1,0 +1,28 @@
+[Unit]
+Description=Obey RP Discord bot (announcements <-> forum bridge)
+After=network.target obey-bridge.service
+Wants=network-online.target obey-bridge.service
+
+[Service]
+Type=simple
+User=obey
+Group=obey
+WorkingDirectory=/opt/obey-bridge
+EnvironmentFile=/opt/obey-bridge/.env
+ExecStart=/usr/bin/node /opt/obey-bridge/dist/bot/index.js
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Hardening — same posture as obey-bridge.service. Bot only opens an
+# outbound Discord WS + loopback HTTP to the bridge; no inbound ports.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/obey-bridge/logs
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target
