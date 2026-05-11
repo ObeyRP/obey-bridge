@@ -19,9 +19,12 @@ StandardError=journal
 # outbound Discord WS + loopback HTTP to the bridge; no inbound ports.
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
+# ProtectHome=true masks /home entirely, which makes the WorkingDirectory
+# below unreachable (systemd reports 200/CHDIR on start). Match the
+# runbook's bridge unit: read-only lets the service load its own files.
+ProtectHome=read-only
 PrivateTmp=true
-ReadWritePaths=/home/obey/obey-bridge/logs
+ReadWritePaths=/home/obey/obey-bridge
 LimitNOFILE=4096
 
 [Install]
