@@ -35,7 +35,9 @@ async function main(): Promise<void> {
     partials: [Partials.Channel, Partials.Message],
   });
 
-  client.once("ready", (c) => {
+  // clientReady is the v15-name for what v14 still calls ready. v14
+  // accepts both; using clientReady silences the deprecation warning.
+  client.once("clientReady", (c) => {
     logger.info(
       {
         botTag: c.user.tag,
