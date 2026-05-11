@@ -23,7 +23,7 @@ in `dist/bot/` so the bridge's existing `dist/server.js` is undisturbed.
 
 ## Required `.env` additions
 
-Append these to `/opt/obey-bridge/.env` on the VPS:
+Append these to `/home/obey/obey-bridge/.env` on the VPS:
 
 ```ini
 # Discord Dev Portal → your app → Bot → Reset Token
@@ -70,14 +70,17 @@ Run the bridge in another terminal — the bot HMACs to
 ## Deploy
 
 ```bash
-# On the bridge VPS (cwd: /opt/obey-bridge)
+# On the bridge VPS (login: ssh obey@<bridge-ip>, cwd: /home/obey/obey-bridge)
 git pull
 npm install
 npm run build                 # bridge → dist/
 npm run bot:build             # bot    → dist/bot/
 
-# Apply migration 0006 (idempotency_key on forum_posts) if you haven't:
-mysql -u root -p qbx_core < sql/0006-add-forum-idempotency.sql
+# Apply migration 0006 (idempotency_key on forum_posts) if you haven't.
+# Note: bridge MySQL goes through Tailscale to the FiveM VPS, so use the
+# bridge user, not local root:
+MYSQL_PWD="$DB_PASS" mysql -h "$FIVEM_TS_IP" -u obey_bridge qbx_core \
+  < sql/0006-add-forum-idempotency.sql
 
 # Install + start the unit:
 sudo cp deploy/obey-bot.service /etc/systemd/system/
