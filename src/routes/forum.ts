@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   addReply,
   createPost,
+  deletePost,
   getPost,
   listPosts,
   patchPost,
@@ -164,6 +165,44 @@ const PatchBody = z.object({
   locked: z.boolean().optional(),
   actor_discord_id: z.string().regex(/^\d{15,21}$/),
   actor_name: z.string().min(1).max(120),
+});
+
+const DeleteBody = z.object({
+  actor_discord_id: z.string().regex(/^\d{15,21}$/),
+  actor_name: z.string().min(1).max(120),
+  actor_rank: z.string().max(64).optional(),
+});
+
+forumRouter.delete("/posts/:id", async (req, res, next) => {
+  try {
+    const idP = IdParam.safeParse(req.params);
+    if (!idP.success) {
+      res.status(400).json({ error: "bad-id" });
+      return;
+    }
+    const bodyP = DeleteBody.safeParse(req.body);
+    if (!bodyP.success) {
+      res
+        .status(400)
+        .json({ error: "bad-body", issues: bodyP.error.flatten() });
+      return;
+    }
+    const result = await deletePost({
+      post_id: idP.data.id,
+      actor_discord_id: bodyP.data.actor_discord_id,
+      actor_name: bodyP.data.actor_name,
+      ...(bodyP.data.actor_rank ? { actor_rank: bodyP.data.actor_rank } : {}),
+    });
+    if (!result.ok) {
+      res
+        .status(result.reason === "not-found" ? 404 : 409)
+        .json({ error: result.reason });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
 });
 
 forumRouter.patch("/posts/:id", async (req, res, next) => {

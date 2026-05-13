@@ -104,7 +104,10 @@ export async function listPosts(args?: {
   status?: PostStatus;
   limit?: number;
 }): Promise<ForumPostRow[]> {
-  const wheres: string[] = [];
+  // Soft-deleted rows are excluded from every listing. To recover one,
+  // a staff member needs to clear deleted_at directly in MySQL (migration
+  // 0007 is just the column + index; there's no undelete route by design).
+  const wheres: string[] = ["p.deleted_at IS NULL"];
   const params: (string | number)[] = [];
   if (args?.type) {
     wheres.push("p.type = ?");
@@ -114,7 +117,7 @@ export async function listPosts(args?: {
     wheres.push("p.status = ?");
     params.push(args.status);
   }
-  const whereSql = wheres.length ? `WHERE ${wheres.join(" AND ")}` : "";
+  const whereSql = `WHERE ${wheres.join(" AND ")}`;
   const limit = Math.min(Math.max(args?.limit ?? 50, 1), 200);
   const [rows] = await pool.query<PostDbRow[]>(
     `SELECT p.id, p.type, p.title, p.body, p.author_discord_id, p.author_name,
@@ -134,7 +137,9 @@ export async function getPost(id: number): Promise<ForumPostDetail | null> {
     `SELECT p.id, p.type, p.title, p.body, p.author_discord_id, p.author_name,
             p.author_avatar, p.status, p.locked, p.created_at, p.updated_at,
             COALESCE((SELECT COUNT(*) FROM forum_replies r WHERE r.post_id = p.id), 0) AS reply_count
-       FROM forum_posts p WHERE p.id = ? LIMIT 1`,
+       FROM forum_posts p
+      WHERE p.id = ? AND p.deleted_at IS NULL
+      LIMIT 1`,
     [id],
   );
   const post = rows[0];
@@ -289,6 +294,49 @@ export async function patchPost(args: {
       JSON.stringify({
         ...(args.status ? { status: args.status } : {}),
         ...(typeof args.locked === "boolean" ? { locked: args.locked } : {}),
+      }),
+    ],
+  );
+  return { ok: true };
+}
+
+/**
+ * Soft-delete a post. Sets `deleted_at = NOW()` and writes a `delete`
+ * audit row. The post becomes invisible to listings and getPost(), but
+ * the row + its audit history stay in the database so a senior staff
+ * member can undelete it manually if needed.
+ */
+export async function deletePost(args: {
+  post_id: number;
+  actor_discord_id: string;
+  actor_name: string;
+  actor_rank?: string;
+}): Promise<{ ok: true } | { ok: false; reason: "not-found" | "already-deleted" }> {
+  const [exists] = await pool.query<PostDbRow[]>(
+    `SELECT id, deleted_at FROM forum_posts WHERE id = ? LIMIT 1`,
+    [args.post_id],
+  );
+  const row = exists[0] as
+    | (PostDbRow & { deleted_at: Date | null })
+    | undefined;
+  if (!row) return { ok: false, reason: "not-found" };
+  if (row.deleted_at) return { ok: false, reason: "already-deleted" };
+
+  await pool.query(
+    `UPDATE forum_posts SET deleted_at = NOW() WHERE id = ?`,
+    [args.post_id],
+  );
+  await pool.query(
+    `INSERT INTO forum_audit_log
+       (post_id, actor_discord_id, actor_name, action, details)
+     VALUES (?, ?, ?, 'delete', ?)`,
+    [
+      args.post_id,
+      args.actor_discord_id,
+      args.actor_name,
+      JSON.stringify({
+        soft: true,
+        ...(args.actor_rank ? { actor_rank: args.actor_rank } : {}),
       }),
     ],
   );
