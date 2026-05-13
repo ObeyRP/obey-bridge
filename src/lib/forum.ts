@@ -104,10 +104,7 @@ export async function listPosts(args?: {
   status?: PostStatus;
   limit?: number;
 }): Promise<ForumPostRow[]> {
-  // Soft-deleted rows are excluded from every listing. To recover one,
-  // a staff member needs to clear deleted_at directly in MySQL (migration
-  // 0007 is just the column + index; there's no undelete route by design).
-  const wheres: string[] = ["p.deleted_at IS NULL"];
+  const wheres: string[] = [];
   const params: (string | number)[] = [];
   if (args?.type) {
     wheres.push("p.type = ?");
@@ -117,7 +114,7 @@ export async function listPosts(args?: {
     wheres.push("p.status = ?");
     params.push(args.status);
   }
-  const whereSql = `WHERE ${wheres.join(" AND ")}`;
+  const whereSql = wheres.length ? `WHERE ${wheres.join(" AND ")}` : "";
   const limit = Math.min(Math.max(args?.limit ?? 50, 1), 200);
   const [rows] = await pool.query<PostDbRow[]>(
     `SELECT p.id, p.type, p.title, p.body, p.author_discord_id, p.author_name,
@@ -137,9 +134,7 @@ export async function getPost(id: number): Promise<ForumPostDetail | null> {
     `SELECT p.id, p.type, p.title, p.body, p.author_discord_id, p.author_name,
             p.author_avatar, p.status, p.locked, p.created_at, p.updated_at,
             COALESCE((SELECT COUNT(*) FROM forum_replies r WHERE r.post_id = p.id), 0) AS reply_count
-       FROM forum_posts p
-      WHERE p.id = ? AND p.deleted_at IS NULL
-      LIMIT 1`,
+       FROM forum_posts p WHERE p.id = ? LIMIT 1`,
     [id],
   );
   const post = rows[0];
@@ -301,44 +296,53 @@ export async function patchPost(args: {
 }
 
 /**
- * Soft-delete a post. Sets `deleted_at = NOW()` and writes a `delete`
- * audit row. The post becomes invisible to listings and getPost(), but
- * the row + its audit history stay in the database so a senior staff
- * member can undelete it manually if needed.
+ * Hard-delete a post. The forum_replies and forum_audit_log FK
+ * constraints both cascade, so this also removes every reply and the
+ * full audit history for the post.
+ *
+ * Heads-up: the audit-log cascade means we lose the moderation record
+ * along with the post. To preserve at least *some* trail, we emit a
+ * structured log line on the bridge process *before* firing the delete.
+ * journalctl + Hetzner snapshots retain that for forensic lookup.
+ *
+ * Gated to Founder/Owner ranks at the portal layer (see
+ * src/app/api/forum/posts/[id]/route.ts). The bridge does not
+ * re-validate ranks — the HMAC+actor pair is trusted because only
+ * portal can issue these requests.
  */
 export async function deletePost(args: {
   post_id: number;
   actor_discord_id: string;
   actor_name: string;
   actor_rank?: string;
-}): Promise<{ ok: true } | { ok: false; reason: "not-found" | "already-deleted" }> {
+}): Promise<{ ok: true } | { ok: false; reason: "not-found" }> {
   const [exists] = await pool.query<PostDbRow[]>(
-    `SELECT id, deleted_at FROM forum_posts WHERE id = ? LIMIT 1`,
+    `SELECT id, type, title, author_discord_id, author_name
+       FROM forum_posts WHERE id = ? LIMIT 1`,
     [args.post_id],
   );
-  const row = exists[0] as
-    | (PostDbRow & { deleted_at: Date | null })
-    | undefined;
+  const row = exists[0];
   if (!row) return { ok: false, reason: "not-found" };
-  if (row.deleted_at) return { ok: false, reason: "already-deleted" };
 
-  await pool.query(
-    `UPDATE forum_posts SET deleted_at = NOW() WHERE id = ?`,
-    [args.post_id],
+  // Forensic line — the only record that survives the cascade.
+  // Format is JSON-ish so it greps cleanly out of journalctl.
+  // eslint-disable-next-line no-console
+  console.log(
+    `[forum.deletePost] HARD DELETE ${JSON.stringify({
+      post_id: args.post_id,
+      type: row.type,
+      title: row.title,
+      original_author_discord_id: row.author_discord_id,
+      original_author_name: row.author_name,
+      actor_discord_id: args.actor_discord_id,
+      actor_name: args.actor_name,
+      actor_rank: args.actor_rank ?? null,
+      at: new Date().toISOString(),
+    })}`,
   );
-  await pool.query(
-    `INSERT INTO forum_audit_log
-       (post_id, actor_discord_id, actor_name, action, details)
-     VALUES (?, ?, ?, 'delete', ?)`,
-    [
-      args.post_id,
-      args.actor_discord_id,
-      args.actor_name,
-      JSON.stringify({
-        soft: true,
-        ...(args.actor_rank ? { actor_rank: args.actor_rank } : {}),
-      }),
-    ],
-  );
+
+  // CASCADEs: forum_replies (fk_forum_reply_post) and
+  // forum_audit_log (fk_forum_audit_post) both go away with the row.
+  await pool.query(`DELETE FROM forum_posts WHERE id = ?`, [args.post_id]);
   return { ok: true };
 }

@@ -194,9 +194,7 @@ forumRouter.delete("/posts/:id", async (req, res, next) => {
       ...(bodyP.data.actor_rank ? { actor_rank: bodyP.data.actor_rank } : {}),
     });
     if (!result.ok) {
-      res
-        .status(result.reason === "not-found" ? 404 : 409)
-        .json({ error: result.reason });
+      res.status(404).json({ error: result.reason });
       return;
     }
     res.json({ ok: true });
