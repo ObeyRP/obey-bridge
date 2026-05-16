@@ -23,8 +23,9 @@ identity.
   announcements, and replies live there. The Discord stays your
   primary place to talk; the forum is the long-form record.
 - **Plus** — `Obey Plus` replaces the old donator package. Existing
-  subscribers keep their perks; renewals still go through the
-  **britlifereality.tebex.io** store for continuity.
+  subscribers keep their perks; the storefront now lives at
+  **obeyrp.tebex.io** (any old britlifereality.tebex.io bookmarks
+  redirect there).
 - **Coins** — the in-game currency formerly known as "BritCoins" is
   now **Obey Coins**. Balances unchanged.
 
