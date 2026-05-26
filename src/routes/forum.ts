@@ -7,8 +7,10 @@ import {
   getPost,
   listPosts,
   patchPost,
+  setVote,
   type PostStatus,
   type PostType,
+  type VoteDirection,
 } from "../lib/forum.js";
 
 export const forumRouter = Router();
@@ -26,6 +28,12 @@ const ListQuery = z.object({
     ])
     .optional(),
   limit: z.coerce.number().int().min(1).max(200).optional().default(50),
+  // Optional viewer ID — when set, each row's my_vote is populated so
+  // the UI can render the active vote without a second round-trip.
+  viewer_discord_id: z
+    .string()
+    .regex(/^\d{15,21}$/)
+    .optional(),
 });
 
 forumRouter.get("/posts", async (req, res, next) => {
@@ -38,6 +46,9 @@ forumRouter.get("/posts", async (req, res, next) => {
     const rows = await listPosts({
       ...(parsed.data.type ? { type: parsed.data.type as PostType } : {}),
       ...(parsed.data.status ? { status: parsed.data.status as PostStatus } : {}),
+      ...(parsed.data.viewer_discord_id
+        ? { viewer_discord_id: parsed.data.viewer_discord_id }
+        : {}),
       limit: parsed.data.limit,
     });
     res.json({ rows });
@@ -48,6 +59,13 @@ forumRouter.get("/posts", async (req, res, next) => {
 
 const IdParam = z.object({ id: z.coerce.number().int().positive() });
 
+const GetPostQuery = z.object({
+  viewer_discord_id: z
+    .string()
+    .regex(/^\d{15,21}$/)
+    .optional(),
+});
+
 forumRouter.get("/posts/:id", async (req, res, next) => {
   try {
     const parsed = IdParam.safeParse(req.params);
@@ -55,7 +73,9 @@ forumRouter.get("/posts/:id", async (req, res, next) => {
       res.status(400).json({ error: "bad-id" });
       return;
     }
-    const post = await getPost(parsed.data.id);
+    const q = GetPostQuery.safeParse(req.query);
+    const viewer = q.success ? q.data.viewer_discord_id : undefined;
+    const post = await getPost(parsed.data.id, viewer);
     if (!post) {
       res.status(404).json({ error: "not-found" });
       return;
@@ -165,6 +185,51 @@ const PatchBody = z.object({
   locked: z.boolean().optional(),
   actor_discord_id: z.string().regex(/^\d{15,21}$/),
   actor_name: z.string().min(1).max(120),
+});
+
+const VoteBody = z.object({
+  voter_discord_id: z.string().regex(/^\d{15,21}$/),
+  // Accept "up" / "down" / null / "none" (alias for null) for caller
+  // ergonomics. Lock to the union the lib uses internally.
+  direction: z.union([z.literal("up"), z.literal("down"), z.null()]),
+});
+
+forumRouter.post("/posts/:id/vote", async (req, res, next) => {
+  try {
+    const idP = IdParam.safeParse(req.params);
+    if (!idP.success) {
+      res.status(400).json({ error: "bad-id" });
+      return;
+    }
+    const bodyP = VoteBody.safeParse(req.body);
+    if (!bodyP.success) {
+      res
+        .status(400)
+        .json({ error: "bad-body", issues: bodyP.error.flatten() });
+      return;
+    }
+    const result = await setVote({
+      post_id: idP.data.id,
+      voter_discord_id: bodyP.data.voter_discord_id,
+      direction: bodyP.data.direction as VoteDirection,
+    });
+    if (!result.ok) {
+      // not-found → 404; wrong-type / locked → 409 (conflict semantics
+      // line up best — "post exists but isn't votable right now").
+      res
+        .status(result.reason === "not-found" ? 404 : 409)
+        .json({ error: result.reason });
+      return;
+    }
+    res.json({
+      ok: true,
+      upvotes: result.upvotes,
+      downvotes: result.downvotes,
+      my_vote: result.my_vote,
+    });
+  } catch (err) {
+    next(err);
+  }
 });
 
 const DeleteBody = z.object({

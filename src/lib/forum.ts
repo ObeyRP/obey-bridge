@@ -23,7 +23,13 @@ export type ForumPostRow = {
   created_at: string;
   updated_at: string;
   reply_count: number;
+  upvotes: number;
+  downvotes: number;
+  /** -1 / 0 / 1 if the listing was fetched with a viewer; null otherwise. */
+  my_vote: -1 | 0 | 1 | null;
 };
+
+export type VoteDirection = "up" | "down" | null;
 
 export type ForumReplyRow = {
   id: number;
@@ -54,6 +60,9 @@ type PostDbRow = RowDataPacket & {
   created_at: Date;
   updated_at: Date;
   reply_count: number;
+  upvotes: number;
+  downvotes: number;
+  my_vote_raw?: number | null;
 };
 
 type ReplyDbRow = RowDataPacket & {
@@ -69,6 +78,15 @@ type ReplyDbRow = RowDataPacket & {
 };
 
 function toPost(r: PostDbRow): ForumPostRow {
+  const myVoteRaw = r.my_vote_raw;
+  const myVote: -1 | 0 | 1 | null =
+    myVoteRaw === undefined || myVoteRaw === null
+      ? null
+      : myVoteRaw > 0
+        ? 1
+        : myVoteRaw < 0
+          ? -1
+          : 0;
   return {
     id: r.id,
     type: r.type,
@@ -82,6 +100,9 @@ function toPost(r: PostDbRow): ForumPostRow {
     created_at: r.created_at.toISOString(),
     updated_at: r.updated_at.toISOString(),
     reply_count: r.reply_count,
+    upvotes: Number(r.upvotes ?? 0),
+    downvotes: Number(r.downvotes ?? 0),
+    my_vote: myVote,
   };
 }
 
@@ -99,10 +120,23 @@ function toReply(r: ReplyDbRow): ForumReplyRow {
   };
 }
 
+/**
+ * Vote-aggregation subquery snippet. Two correlated subqueries against
+ * forum_post_votes — uses the (post_id, direction) selectivity from the
+ * idx_post index, fast at our scale.
+ */
+const VOTE_SELECT = `
+  COALESCE((SELECT COUNT(*) FROM forum_post_votes v WHERE v.post_id = p.id AND v.direction = 1),  0) AS upvotes,
+  COALESCE((SELECT COUNT(*) FROM forum_post_votes v WHERE v.post_id = p.id AND v.direction = -1), 0) AS downvotes
+`;
+
 export async function listPosts(args?: {
   type?: PostType;
   status?: PostStatus;
   limit?: number;
+  /** Discord ID of the viewer. If passed, each row's my_vote field is
+   *  populated with that user's existing vote (or 0 if none). */
+  viewer_discord_id?: string;
 }): Promise<ForumPostRow[]> {
   const wheres: string[] = [];
   const params: (string | number)[] = [];
@@ -116,26 +150,51 @@ export async function listPosts(args?: {
   }
   const whereSql = wheres.length ? `WHERE ${wheres.join(" AND ")}` : "";
   const limit = Math.min(Math.max(args?.limit ?? 50, 1), 200);
+
+  // Build the my_vote subquery only when a viewer is passed — keeps the
+  // anonymous-listing query simple and avoids an unused subquery.
+  const viewerSelect = args?.viewer_discord_id
+    ? ", (SELECT direction FROM forum_post_votes v WHERE v.post_id = p.id AND v.voter_discord_id = ? LIMIT 1) AS my_vote_raw"
+    : "";
+  const viewerParams: (string | number)[] = args?.viewer_discord_id
+    ? [args.viewer_discord_id]
+    : [];
+
   const [rows] = await pool.query<PostDbRow[]>(
     `SELECT p.id, p.type, p.title, p.body, p.author_discord_id, p.author_name,
             p.author_avatar, p.status, p.locked, p.created_at, p.updated_at,
-            COALESCE((SELECT COUNT(*) FROM forum_replies r WHERE r.post_id = p.id), 0) AS reply_count
+            COALESCE((SELECT COUNT(*) FROM forum_replies r WHERE r.post_id = p.id), 0) AS reply_count,
+            ${VOTE_SELECT}
+            ${viewerSelect}
        FROM forum_posts p
        ${whereSql}
        ORDER BY p.created_at DESC
        LIMIT ?`,
-    [...params, limit],
+    // viewer param has to be early because it's referenced in the SELECT clause.
+    [...viewerParams, ...params, limit],
   );
   return rows.map(toPost);
 }
 
-export async function getPost(id: number): Promise<ForumPostDetail | null> {
+export async function getPost(
+  id: number,
+  viewer_discord_id?: string,
+): Promise<ForumPostDetail | null> {
+  const viewerSelect = viewer_discord_id
+    ? ", (SELECT direction FROM forum_post_votes v WHERE v.post_id = p.id AND v.voter_discord_id = ? LIMIT 1) AS my_vote_raw"
+    : "";
+  const viewerParams: (string | number)[] = viewer_discord_id
+    ? [viewer_discord_id]
+    : [];
+
   const [rows] = await pool.query<PostDbRow[]>(
     `SELECT p.id, p.type, p.title, p.body, p.author_discord_id, p.author_name,
             p.author_avatar, p.status, p.locked, p.created_at, p.updated_at,
-            COALESCE((SELECT COUNT(*) FROM forum_replies r WHERE r.post_id = p.id), 0) AS reply_count
+            COALESCE((SELECT COUNT(*) FROM forum_replies r WHERE r.post_id = p.id), 0) AS reply_count,
+            ${VOTE_SELECT}
+            ${viewerSelect}
        FROM forum_posts p WHERE p.id = ? LIMIT 1`,
-    [id],
+    [...viewerParams, id],
   );
   const post = rows[0];
   if (!post) return null;
@@ -345,4 +404,79 @@ export async function deletePost(args: {
   // forum_audit_log (fk_forum_audit_post) both go away with the row.
   await pool.query(`DELETE FROM forum_posts WHERE id = ?`, [args.post_id]);
   return { ok: true };
+}
+
+/**
+ * Set / change / remove a viewer's vote on a post. Direction:
+ *   - "up"   = insert/update to +1
+ *   - "down" = insert/update to -1
+ *   - null   = delete the row (un-vote)
+ *
+ * Returns the post's current vote totals + the viewer's resulting vote
+ * so the UI can render the new state without a second round-trip.
+ *
+ * Rejects votes on:
+ *   - posts that don't exist
+ *   - announcement-type posts (suggestions only — announcements are
+ *     one-way and shouldn't be a popularity contest)
+ *   - locked posts (lock means "no further engagement")
+ */
+export async function setVote(args: {
+  post_id: number;
+  voter_discord_id: string;
+  direction: VoteDirection;
+}): Promise<
+  | {
+      ok: true;
+      upvotes: number;
+      downvotes: number;
+      my_vote: -1 | 0 | 1;
+    }
+  | { ok: false; reason: "not-found" | "wrong-type" | "locked" }
+> {
+  const [posts] = await pool.query<PostDbRow[]>(
+    `SELECT id, type, locked FROM forum_posts WHERE id = ? LIMIT 1`,
+    [args.post_id],
+  );
+  const post = posts[0];
+  if (!post) return { ok: false, reason: "not-found" };
+  if (post.type !== "suggestion") return { ok: false, reason: "wrong-type" };
+  if (post.locked) return { ok: false, reason: "locked" };
+
+  if (args.direction === null) {
+    await pool.query(
+      `DELETE FROM forum_post_votes WHERE post_id = ? AND voter_discord_id = ?`,
+      [args.post_id, args.voter_discord_id],
+    );
+  } else {
+    const dir = args.direction === "up" ? 1 : -1;
+    // ON DUPLICATE KEY UPDATE handles both "first vote" and "change
+    // direction" in a single round-trip. UNIQUE (post_id, voter_id)
+    // is what makes the duplicate-key path fire.
+    await pool.query(
+      `INSERT INTO forum_post_votes (post_id, voter_discord_id, direction)
+       VALUES (?, ?, ?)
+       ON DUPLICATE KEY UPDATE direction = VALUES(direction)`,
+      [args.post_id, args.voter_discord_id, dir],
+    );
+  }
+
+  // Re-read totals and the viewer's current vote in one query each.
+  const [counts] = await pool.query<RowDataPacket[]>(
+    `SELECT
+       COALESCE(SUM(CASE WHEN direction =  1 THEN 1 ELSE 0 END), 0) AS upvotes,
+       COALESCE(SUM(CASE WHEN direction = -1 THEN 1 ELSE 0 END), 0) AS downvotes
+     FROM forum_post_votes WHERE post_id = ?`,
+    [args.post_id],
+  );
+  const c = counts[0] as { upvotes: number; downvotes: number } | undefined;
+  const my_vote: -1 | 0 | 1 =
+    args.direction === "up" ? 1 : args.direction === "down" ? -1 : 0;
+
+  return {
+    ok: true,
+    upvotes: Number(c?.upvotes ?? 0),
+    downvotes: Number(c?.downvotes ?? 0),
+    my_vote,
+  };
 }
