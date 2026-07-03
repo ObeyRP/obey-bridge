@@ -1,7 +1,7 @@
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import { pool } from "../db.js";
 
-export type PostType = "suggestion" | "announcement";
+export type PostType = "suggestion" | "announcement" | "changelog";
 export type PostStatus =
   | "open"
   | "under-review"
@@ -9,6 +9,21 @@ export type PostStatus =
   | "rejected"
   | "implemented"
   | "moved-to-faq";
+
+/**
+ * Fixed set of emoji players can react with on the website. The bridge
+ * validates against this allowlist so arbitrary emoji / injection can't
+ * reach the reactions table. Order here is the order the portal renders
+ * them in. Keep in sync with obey-portal's REACTION_EMOJI.
+ */
+export const REACTION_EMOJI = ["👍", "❤️", "🎉", "🔥"] as const;
+export type ReactionEmoji = (typeof REACTION_EMOJI)[number];
+
+export function isReactionEmoji(v: string): v is ReactionEmoji {
+  return (REACTION_EMOJI as readonly string[]).includes(v);
+}
+
+export type ReactionCount = { emoji: string; count: number };
 
 export type ForumPostRow = {
   id: number;
@@ -27,6 +42,10 @@ export type ForumPostRow = {
   downvotes: number;
   /** -1 / 0 / 1 if the listing was fetched with a viewer; null otherwise. */
   my_vote: -1 | 0 | 1 | null;
+  /** Per-emoji counts, only emoji with count > 0. */
+  reactions: ReactionCount[];
+  /** Emoji the viewer has reacted with. Empty when no viewer was passed. */
+  my_reactions: string[];
 };
 
 export type VoteDirection = "up" | "down" | null;
@@ -103,7 +122,63 @@ function toPost(r: PostDbRow): ForumPostRow {
     upvotes: Number(r.upvotes ?? 0),
     downvotes: Number(r.downvotes ?? 0),
     my_vote: myVote,
+    // Reactions are enriched in a second batch query by the caller
+    // (attachReactions) to avoid a correlated per-emoji subquery per row.
+    reactions: [],
+    my_reactions: [],
   };
+}
+
+/**
+ * Batch-loads reaction counts (and, if a viewer is given, that viewer's
+ * own reactions) for a set of posts and mutates them in place. One query
+ * for the counts, one for the viewer's reactions — no per-post round-trip.
+ */
+async function attachReactions(
+  posts: ForumPostRow[],
+  viewerDiscordId?: string,
+): Promise<void> {
+  if (posts.length === 0) return;
+  const ids = posts.map((p) => p.id);
+  const byId = new Map(posts.map((p) => [p.id, p]));
+
+  const [countRows] = await pool.query<RowDataPacket[]>(
+    `SELECT post_id, emoji, COUNT(*) AS n
+       FROM forum_post_reactions
+      WHERE post_id IN (?)
+      GROUP BY post_id, emoji`,
+    [ids],
+  );
+  for (const row of countRows as {
+    post_id: number;
+    emoji: string;
+    n: number;
+  }[]) {
+    const post = byId.get(row.post_id);
+    if (post) post.reactions.push({ emoji: row.emoji, count: Number(row.n) });
+  }
+  // Present emoji in the canonical REACTION_EMOJI order regardless of
+  // insertion order from the GROUP BY.
+  for (const post of posts) {
+    post.reactions.sort(
+      (a, b) =>
+        REACTION_EMOJI.indexOf(a.emoji as ReactionEmoji) -
+        REACTION_EMOJI.indexOf(b.emoji as ReactionEmoji),
+    );
+  }
+
+  if (viewerDiscordId) {
+    const [mineRows] = await pool.query<RowDataPacket[]>(
+      `SELECT post_id, emoji
+         FROM forum_post_reactions
+        WHERE post_id IN (?) AND reactor_discord_id = ?`,
+      [ids, viewerDiscordId],
+    );
+    for (const row of mineRows as { post_id: number; emoji: string }[]) {
+      const post = byId.get(row.post_id);
+      if (post) post.my_reactions.push(row.emoji);
+    }
+  }
 }
 
 function toReply(r: ReplyDbRow): ForumReplyRow {
@@ -173,7 +248,9 @@ export async function listPosts(args?: {
     // viewer param has to be early because it's referenced in the SELECT clause.
     [...viewerParams, ...params, limit],
   );
-  return rows.map(toPost);
+  const posts = rows.map(toPost);
+  await attachReactions(posts, args?.viewer_discord_id);
+  return posts;
 }
 
 export async function getPost(
@@ -204,7 +281,9 @@ export async function getPost(
        FROM forum_replies WHERE post_id = ? ORDER BY created_at ASC`,
     [id],
   );
-  return { ...toPost(post), replies: replyRows.map(toReply) };
+  const mapped = toPost(post);
+  await attachReactions([mapped], viewer_discord_id);
+  return { ...mapped, replies: replyRows.map(toReply) };
 }
 
 export async function createPost(args: {
@@ -479,4 +558,124 @@ export async function setVote(args: {
     downvotes: Number(c?.downvotes ?? 0),
     my_vote,
   };
+}
+
+/**
+ * Toggle a single emoji reaction for a viewer on a post. `on=true` adds
+ * it, `on=false` removes it. Emoji must be in REACTION_EMOJI (validated
+ * at the route layer too). Works on any post type; locked posts still
+ * accept reactions (a locked changelog can still be celebrated).
+ *
+ * Returns the post's fresh per-emoji counts + the viewer's current set
+ * so the UI settles on truth after an optimistic update.
+ */
+export async function setReaction(args: {
+  post_id: number;
+  reactor_discord_id: string;
+  emoji: ReactionEmoji;
+  on: boolean;
+}): Promise<
+  | { ok: true; reactions: ReactionCount[]; my_reactions: string[] }
+  | { ok: false; reason: "not-found" }
+> {
+  const [posts] = await pool.query<RowDataPacket[]>(
+    `SELECT id FROM forum_posts WHERE id = ? LIMIT 1`,
+    [args.post_id],
+  );
+  if (!posts[0]) return { ok: false, reason: "not-found" };
+
+  if (args.on) {
+    // INSERT IGNORE — re-adding an existing reaction is a no-op thanks to
+    // the UNIQUE (post_id, reactor, emoji) key.
+    await pool.query(
+      `INSERT IGNORE INTO forum_post_reactions
+         (post_id, reactor_discord_id, emoji)
+       VALUES (?, ?, ?)`,
+      [args.post_id, args.reactor_discord_id, args.emoji],
+    );
+  } else {
+    await pool.query(
+      `DELETE FROM forum_post_reactions
+        WHERE post_id = ? AND reactor_discord_id = ? AND emoji = ?`,
+      [args.post_id, args.reactor_discord_id, args.emoji],
+    );
+  }
+
+  const [countRows] = await pool.query<RowDataPacket[]>(
+    `SELECT emoji, COUNT(*) AS n FROM forum_post_reactions
+      WHERE post_id = ? GROUP BY emoji`,
+    [args.post_id],
+  );
+  const reactions: ReactionCount[] = (
+    countRows as { emoji: string; n: number }[]
+  )
+    .map((r) => ({ emoji: r.emoji, count: Number(r.n) }))
+    .sort(
+      (a, b) =>
+        REACTION_EMOJI.indexOf(a.emoji as ReactionEmoji) -
+        REACTION_EMOJI.indexOf(b.emoji as ReactionEmoji),
+    );
+
+  const [mineRows] = await pool.query<RowDataPacket[]>(
+    `SELECT emoji FROM forum_post_reactions
+      WHERE post_id = ? AND reactor_discord_id = ?`,
+    [args.post_id, args.reactor_discord_id],
+  );
+  const my_reactions = (mineRows as { emoji: string }[]).map((r) => r.emoji);
+
+  return { ok: true, reactions, my_reactions };
+}
+
+/**
+ * Edit a post's title and/or body. Used by staff to fix up changelog /
+ * announcement content on the site. Writes an 'edit' audit row capturing
+ * who changed it (the previous content isn't stored — the audit log is a
+ * who/when trail, not a full version history).
+ */
+export async function editPost(args: {
+  post_id: number;
+  title?: string;
+  body?: string;
+  actor_discord_id: string;
+  actor_name: string;
+}): Promise<{ ok: true } | { ok: false; reason: "not-found" | "no-op" }> {
+  const [exists] = await pool.query<PostDbRow[]>(
+    `SELECT id FROM forum_posts WHERE id = ? LIMIT 1`,
+    [args.post_id],
+  );
+  if (!exists[0]) return { ok: false, reason: "not-found" };
+
+  const sets: string[] = [];
+  const params: (string | number)[] = [];
+  if (typeof args.title === "string") {
+    sets.push("title = ?");
+    params.push(args.title);
+  }
+  if (typeof args.body === "string") {
+    sets.push("body = ?");
+    params.push(args.body);
+  }
+  if (sets.length === 0) return { ok: false, reason: "no-op" };
+
+  await pool.query(
+    `UPDATE forum_posts SET ${sets.join(", ")} WHERE id = ?`,
+    [...params, args.post_id],
+  );
+  await pool.query(
+    `INSERT INTO forum_audit_log
+       (post_id, actor_discord_id, actor_name, action, details)
+     VALUES (?, ?, ?, 'edit', ?)`,
+    [
+      args.post_id,
+      args.actor_discord_id,
+      args.actor_name,
+      JSON.stringify({
+        edited_fields: [
+          ...(typeof args.title === "string" ? ["title"] : []),
+          ...(typeof args.body === "string" ? ["body"] : []),
+        ],
+      }),
+    ],
+  );
+  return { ok: true };
 }

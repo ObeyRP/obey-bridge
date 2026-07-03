@@ -4,19 +4,23 @@ import {
   addReply,
   createPost,
   deletePost,
+  editPost,
   getPost,
+  isReactionEmoji,
   listPosts,
   patchPost,
+  setReaction,
   setVote,
   type PostStatus,
   type PostType,
+  type ReactionEmoji,
   type VoteDirection,
 } from "../lib/forum.js";
 
 export const forumRouter = Router();
 
 const ListQuery = z.object({
-  type: z.enum(["suggestion", "announcement"]).optional(),
+  type: z.enum(["suggestion", "announcement", "changelog"]).optional(),
   status: z
     .enum([
       "open",
@@ -87,7 +91,7 @@ forumRouter.get("/posts/:id", async (req, res, next) => {
 });
 
 const CreateBody = z.object({
-  type: z.enum(["suggestion", "announcement"]),
+  type: z.enum(["suggestion", "announcement", "changelog"]),
   title: z.string().min(3).max(200),
   body: z.string().min(10).max(8000),
   author_discord_id: z.string().regex(/^\d{15,21}$/),
@@ -183,6 +187,11 @@ const PatchBody = z.object({
     ])
     .optional(),
   locked: z.boolean().optional(),
+  // Content edits — used by staff to fix up changelog / announcement
+  // title + body from the website. Gated to high-trust staff at the
+  // portal layer.
+  title: z.string().min(3).max(200).optional(),
+  body: z.string().min(10).max(8000).optional(),
   actor_discord_id: z.string().regex(/^\d{15,21}$/),
   actor_name: z.string().min(1).max(120),
 });
@@ -226,6 +235,50 @@ forumRouter.post("/posts/:id/vote", async (req, res, next) => {
       upvotes: result.upvotes,
       downvotes: result.downvotes,
       my_vote: result.my_vote,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const ReactBody = z.object({
+  reactor_discord_id: z.string().regex(/^\d{15,21}$/),
+  emoji: z.string().min(1).max(16),
+  on: z.boolean(),
+});
+
+forumRouter.post("/posts/:id/react", async (req, res, next) => {
+  try {
+    const idP = IdParam.safeParse(req.params);
+    if (!idP.success) {
+      res.status(400).json({ error: "bad-id" });
+      return;
+    }
+    const bodyP = ReactBody.safeParse(req.body);
+    if (!bodyP.success) {
+      res
+        .status(400)
+        .json({ error: "bad-body", issues: bodyP.error.flatten() });
+      return;
+    }
+    if (!isReactionEmoji(bodyP.data.emoji)) {
+      res.status(400).json({ error: "bad-emoji" });
+      return;
+    }
+    const result = await setReaction({
+      post_id: idP.data.id,
+      reactor_discord_id: bodyP.data.reactor_discord_id,
+      emoji: bodyP.data.emoji as ReactionEmoji,
+      on: bodyP.data.on,
+    });
+    if (!result.ok) {
+      res.status(404).json({ error: result.reason });
+      return;
+    }
+    res.json({
+      ok: true,
+      reactions: result.reactions,
+      my_reactions: result.my_reactions,
     });
   } catch (err) {
     next(err);
@@ -280,19 +333,56 @@ forumRouter.patch("/posts/:id", async (req, res, next) => {
       res.status(400).json({ error: "bad-body" });
       return;
     }
-    const result = await patchPost({
-      post_id: idP.data.id,
-      ...(bodyP.data.status ? { status: bodyP.data.status as PostStatus } : {}),
-      ...(typeof bodyP.data.locked === "boolean"
-        ? { locked: bodyP.data.locked }
-        : {}),
-      actor_discord_id: bodyP.data.actor_discord_id,
-      actor_name: bodyP.data.actor_name,
-    });
-    if (!result.ok) {
-      res.status(404).json({ error: result.reason });
-      return;
+
+    // Content edits (title/body) go through editPost; moderation changes
+    // (status/lock) go through patchPost. A single PATCH request can do
+    // both — content first, then moderation.
+    const editsContent =
+      typeof bodyP.data.title === "string" ||
+      typeof bodyP.data.body === "string";
+
+    if (editsContent) {
+      const editResult = await editPost({
+        post_id: idP.data.id,
+        ...(typeof bodyP.data.title === "string"
+          ? { title: bodyP.data.title }
+          : {}),
+        ...(typeof bodyP.data.body === "string"
+          ? { body: bodyP.data.body }
+          : {}),
+        actor_discord_id: bodyP.data.actor_discord_id,
+        actor_name: bodyP.data.actor_name,
+      });
+      if (!editResult.ok && editResult.reason === "not-found") {
+        res.status(404).json({ error: "not-found" });
+        return;
+      }
+      // "no-op" (both fields absent) can't happen here since editsContent
+      // is true, so any other !ok is a real failure — fall through.
     }
+
+    const changesModeration =
+      typeof bodyP.data.status === "string" ||
+      typeof bodyP.data.locked === "boolean";
+
+    if (changesModeration) {
+      const result = await patchPost({
+        post_id: idP.data.id,
+        ...(bodyP.data.status
+          ? { status: bodyP.data.status as PostStatus }
+          : {}),
+        ...(typeof bodyP.data.locked === "boolean"
+          ? { locked: bodyP.data.locked }
+          : {}),
+        actor_discord_id: bodyP.data.actor_discord_id,
+        actor_name: bodyP.data.actor_name,
+      });
+      if (!result.ok) {
+        res.status(404).json({ error: result.reason });
+        return;
+      }
+    }
+
     res.json({ ok: true });
   } catch (err) {
     next(err);

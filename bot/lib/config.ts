@@ -19,6 +19,10 @@ const Schema = z.object({
       "DISCORD_ANNOUNCE_CHANNEL_ID must be a Discord snowflake (right-click #announcements → Copy ID)",
   }),
 
+  // #changelog channel — optional. When set, obey-bot mirrors messages
+  // posted here into the portal /changelog page. Leave unset to disable.
+  DISCORD_CHANGELOG_CHANNEL_ID: z.string().regex(/^\d{15,21}$/).optional(),
+
   // P1 notifier channels — optional, only enforced when those features ship.
   DISCORD_PLUS_CHANNEL_ID: z.string().regex(/^\d{15,21}$/).optional(),
   DISCORD_STAFF_APPS_CHANNEL_ID: z.string().regex(/^\d{15,21}$/).optional(),

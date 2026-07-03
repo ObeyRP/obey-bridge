@@ -2,6 +2,7 @@ import { Client, GatewayIntentBits, Partials } from "discord.js";
 import { config } from "./lib/config.js";
 import { logger } from "./lib/logger.js";
 import { registerAnnouncementsSync } from "./handlers/announcements-sync.js";
+import { registerChangelogSync } from "./handlers/changelog-sync.js";
 
 // obey-bot — Phase 5 P0.
 //
@@ -58,6 +59,7 @@ async function main(): Promise<void> {
   });
 
   registerAnnouncementsSync(client);
+  registerChangelogSync(client);
 
   // Graceful shutdown — give systemd a clean exit and Discord a graceful
   // disconnect so we don't sit on a phantom presence.
